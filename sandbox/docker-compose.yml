@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # 服务 1: 数据库 (MySQL)
+  # 这里的服务名 "db-travel" 就是你在 conn.php 里填写的 host
+  db-travel:
+    image: mysql:5.7                  # 使用 MySQL 5.7，对旧 PHP 项目兼容性最好
+    container_name: hptsa_db_travel   # 给容器起个固定的名字，方便查看
+    restart: always                   # 如果崩了自动重启
+    environment:
+      MYSQL_ROOT_PASSWORD: root       # 数据库 root 密码 (对应 conn.php)
+      MYSQL_DATABASE: travel_db       # 自动创建的数据库名 (对应 conn.php)
+    volumes:
+      # 将宿主机的 SQL 文件挂载到容器内，启动时自动导入数据
+      - ./targets/travel-journal/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - internal_vuln_net             # 加入内部隔离网络
+
+  # 服务 2: Web 应用 (PHP + Apache)
+  target-travel:
+    build: ./targets/travel-journal   # 告诉 Docker 去哪里找 Dockerfile
+    container_name: hptsa_target_travel
+    ports:
+      - "8082:80"                     # 端口映射：访问本机的 8082 -> 转到容器的 80
+    depends_on:
+      - db-travel                     # 确保数据库先启动，Web 后启动
+    networks:
+      - internal_vuln_net             # 加入同一个网络才能互通
+
+  # 服务 3: OWASP ZAP (安全扫描工具)
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable    # 使用官方 ZAP Docker 镜像
+    container_name: hptsa_zap
+    ports:
+      - "8080:8080"                   # 暴露 ZAP API 端口，供宿主机访问
+    command: zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.disablekey=true -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
+    networks:
+      - internal_vuln_net             # 加入同一个网络，可以扫描 target-travel
+    restart: unless-stopped           # 除非手动停止，否则自动重启
+
+# 网络配置
+networks:
+  internal_vuln_net:
+    driver: bridge
